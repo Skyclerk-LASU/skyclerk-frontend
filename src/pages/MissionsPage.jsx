@@ -1,7 +1,17 @@
 import DeliveryControlPanel from '../components/DeliveryControlPanel'
 import { useMission } from '../hooks/useMission'
+import Icon from '../components/Icon'
 
-const STATE_COLORS = { IDLE:'neutral', PREPARING:'info', DEPARTED:'info', EN_ROUTE:'active', ARRIVING:'warn', DELIVERED:'success', RETURNING:'returning', EMERGENCY:'danger' }
+const STATE_META = {
+  IDLE:      { color:'neutral',   icon:'drone'     },
+  PREPARING: { color:'info',      icon:'drone'     },
+  DEPARTED:  { color:'info',      icon:'drone'     },
+  EN_ROUTE:  { color:'active',    icon:'drone'     },
+  ARRIVING:  { color:'warn',      icon:'warning'   },
+  DELIVERED: { color:'success',   icon:'delivered' },
+  RETURNING: { color:'returning', icon:'rtb'       },
+  EMERGENCY: { color:'danger',    icon:'emergency' },
+}
 
 export default function MissionsPage() {
   const { packages } = useMission()
@@ -11,40 +21,42 @@ export default function MissionsPage() {
 
   return (
     <div className="page standalone-page">
+
       <div className="page-header">
         <div>
-          <div className="page-title"><span className="page-title__icon">📦</span>Missions</div>
+          <div className="page-title">
+            <Icon name="mission" size={22} style={{color:'var(--blue)'}}/>
+            Missions
+          </div>
           <div className="page-subtitle">DELIVERY MISSION CONTROL</div>
         </div>
       </div>
 
-      <div className="section-label">MISSION SUMMARY</div>
+      <div className="section-label">Summary</div>
       <div className="stat-row">
-        <div className="stat-card stat-card--blue">
-          <div className="stat-card__label">TOTAL PACKAGES</div>
-          <div className="stat-card__value">{packages.length}</div>
-        </div>
-        <div className="stat-card stat-card--cyan">
-          <div className="stat-card__label">ACTIVE</div>
-          <div className="stat-card__value">{active}</div>
-        </div>
-        <div className="stat-card stat-card--green">
-          <div className="stat-card__label">DELIVERED</div>
-          <div className="stat-card__value">{delivered}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-card__label">IDLE</div>
-          <div className="stat-card__value">{idle}</div>
-        </div>
+        {[
+          { label:'TOTAL',     val:packages.length, color:'blue',  icon:'payload'   },
+          { label:'ACTIVE',    val:active,           color:'cyan',  icon:'drone'     },
+          { label:'DELIVERED', val:delivered,        color:'green', icon:'delivered' },
+          { label:'IDLE',      val:idle,             color:'',      icon:'analytics' },
+        ].map(s => (
+          <div key={s.label} className={`stat-card ${s.color ? `stat-card--${s.color}` : ''}`}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'8px'}}>
+              <div className="stat-card__label">{s.label}</div>
+              <Icon name={s.icon} size={16} style={{opacity:0.4}}/>
+            </div>
+            <div className="stat-card__value">{s.val}</div>
+          </div>
+        ))}
       </div>
 
-      <div className="section-label">PACKAGE STATUS</div>
+      <div className="section-label">Package Status</div>
       <div className="content-card">
         <div className="content-card__body" style={{padding:0}}>
           <table className="data-table">
             <thead>
               <tr>
-                <th>PACKAGE ID</th>
+                <th>ID</th>
                 <th>DESTINATION</th>
                 <th>STATE</th>
                 <th>PROGRESS</th>
@@ -52,33 +64,47 @@ export default function MissionsPage() {
               </tr>
             </thead>
             <tbody>
-              {packages.map(p => (
-                <tr key={p.id}>
-                  <td style={{color:'var(--blue)'}}>{p.id}</td>
-                  <td style={{fontWeight:500}}>{p.dest}</td>
-                  <td><span className={`mc-state mc-state--${STATE_COLORS[p.state]||'neutral'}`}>{p.state.replace('_',' ')}</span></td>
-                  <td>
-                    <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
-                      <div className="tele-bar" style={{width:'80px',marginTop:0}}>
-                        <div className="tele-bar-fill tele-bar-fill--normal" style={{width:`${p.progress}%`}} />
+              {packages.map(p => {
+                const meta = STATE_META[p.state] || STATE_META.IDLE
+                return (
+                  <tr key={p.id}>
+                    <td style={{color:'var(--blue)',fontWeight:500}}>{p.id}</td>
+                    <td>
+                      <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                        <Icon name="warehouse" size={13} style={{color:'var(--text3)'}}/>
+                        {p.dest}
                       </div>
-                      <span style={{fontSize:'10px',color:'var(--text3)'}}>{Math.round(p.progress)}%</span>
-                    </div>
-                  </td>
-                  <td style={{color:'var(--text3)'}}>{p.eta !== '00:00:00' ? p.eta : '—'}</td>
-                </tr>
-              ))}
+                    </td>
+                    <td>
+                      <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                        <Icon name={meta.icon} size={12} />
+                        <span className={`mc-state mc-state--${meta.color}`}>{p.state.replace('_',' ')}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                        <div className="tele-bar" style={{width:'80px',marginTop:0}}>
+                          <div className="tele-bar-fill tele-bar-fill--normal" style={{width:`${p.progress}%`}}/>
+                        </div>
+                        <span style={{fontFamily:'var(--mono)',fontSize:'10px',color:'var(--text3)'}}>{Math.round(p.progress)}%</span>
+                      </div>
+                    </td>
+                    <td style={{fontFamily:'var(--mono)',fontSize:'11px',color:'var(--text3)'}}>{p.eta !== '00:00:00' ? p.eta : '—'}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
       </div>
 
-      <div className="section-label">MISSION CONTROL</div>
+      <div className="section-label">Mission Control</div>
       <div className="content-card">
-        <div style={{maxHeight:'400px',overflow:'hidden'}}>
+        <div style={{maxHeight:'420px',overflow:'hidden'}}>
           <DeliveryControlPanel />
         </div>
       </div>
+
     </div>
   )
 }

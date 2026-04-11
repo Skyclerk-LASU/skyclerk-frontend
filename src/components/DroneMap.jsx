@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import Icon from './Icon'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { useDroneMovement, WAREHOUSE, DESTINATIONS } from '../hooks/useDroneMovement'
@@ -220,11 +221,11 @@ export default function DroneMap() {
       )}
 
       <div className="map-controls">
-        <button className="map-ctrl-btn" onClick={() => leafletMap.current?.zoomIn()}>+</button>
-        <button className="map-ctrl-btn" onClick={() => leafletMap.current?.zoomOut()}>−</button>
-        <button className={`map-ctrl-btn ${follow ? 'map-ctrl-btn--active' : ''}`} onClick={() => setFollow(f => !f)}>⊙</button>
-        <button className="map-ctrl-btn" onClick={fitRoute}>⊞</button>
-        <button className={`map-ctrl-btn ${showLegend ? 'map-ctrl-btn--active' : ''}`} onClick={() => setShowLegend(s => !s)}>≡</button>
+        <button className="map-ctrl-btn" onClick={() => leafletMap.current?.zoomIn()} title="Zoom in"><Icon name="zoomIn" size={14}/></button>
+        <button className="map-ctrl-btn" onClick={() => leafletMap.current?.zoomOut()} title="Zoom out"><Icon name="zoomOut" size={14}/></button>
+        <button className={`map-ctrl-btn ${follow ? 'map-ctrl-btn--active' : ''}`} onClick={() => setFollow(f => !f)} title="Follow drone"><Icon name="follow" size={14}/></button>
+        <button className="map-ctrl-btn" onClick={fitRoute} title="Fit full route"><Icon name="fitRoute" size={14}/></button>
+        <button className={`map-ctrl-btn ${showLegend ? 'map-ctrl-btn--active' : ''}`} onClick={() => setShowLegend(s => !s)} title="Toggle legend"><Icon name="legend" size={14}/></button>
       </div>
     </div>
   )
