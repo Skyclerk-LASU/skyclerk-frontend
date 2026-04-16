@@ -1,26 +1,88 @@
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { emitEvent } from '../services/missionEventBus'
-import { useState, useCallback, useEffect } from 'react'
-import { executeCommand, SENSOR_REGISTRY, QUICK_COMMANDS } from '../services/sensorService'
+import { useTelemetry } from './useTelemetry'
+import {
+  executeCommand,
+  SENSOR_REGISTRY,
+  QUICK_COMMANDS,
+  seedSensorsFromTelemetry,
+} from '../services/sensorService'
 
 export function useSensor() {
-  const [sensors,     setSensors]     = useState(SENSOR_REGISTRY)
-  const [terminal,    setTerminal]    = useState([
+  const [sensors,    setSensors]    = useState(SENSOR_REGISTRY)
+  const [terminal,   setTerminal]   = useState([
     { id: 0, type: 'sys',  text: 'SKYCLECK SENSOR TERMINAL v1.0' },
-    { id: 1, type: 'sys',  text: 'All sensors online. Type a command or use quick actions.' },
+    { id: 1, type: 'sys',  text: 'Connecting to Firebase telemetry...' },
     { id: 2, type: 'info', text: 'Available: CAPTURE, OBS_SCAN, TEMP, PAYLOAD, GPS_RECAL, LIDAR, BARO, IMU_CAL, DIAG_ALL' },
   ])
-  const [cmdInput,    setCmdInput]    = useState('')
-  const [running,     setRunning]     = useState(null)   // commandId currently running
-  const [cmdHistory,  setCmdHistory]  = useState([])
-  const [histIdx,     setHistIdx]     = useState(-1)
-  const idRef = useState(100)[0]
-  let nextId  = idRef
+  const [cmdInput,   setCmdInput]   = useState('')
+  const [running,    setRunning]    = useState(null)
+  const [cmdHistory, setCmdHistory] = useState([])
+  const [histIdx,    setHistIdx]    = useState(-1)
 
+  // ─── Terminal helper — defined first so useEffects below can use it ───────────
   const addLine = useCallback((type, text) => {
     setTerminal(prev => [...prev, { id: Date.now() + Math.random(), type, text }].slice(-80))
   }, [])
 
-  // Update sensor registry value after a command
+  // ── Seed TEMP, PAYLOAD, GPS tiles from Firebase on first connect ─────────────
+  const { telemetry, connected } = useTelemetry()
+  const seededRef = useRef(false)
+
+  useEffect(() => {
+    // Only seed once — on the first valid Firebase snapshot
+    if (!connected || seededRef.current) return
+    seededRef.current = true
+    setSensors(prev => seedSensorsFromTelemetry(prev, telemetry))
+    addLine('ok', 'Firebase telemetry connected — sensor tiles updated')
+  }, [connected, telemetry, addLine])
+
+  // ── Keep TEMP, PAYLOAD and GPS tiles live as Firebase updates ────────────────
+  useEffect(() => {
+    if (!connected) return
+    setSensors(prev => prev.map(s => {
+      if (s.id === 'TEMP') {
+        const val    = telemetry.temp?.value ?? '—'
+        const status = telemetry.temp?.status ?? 'normal'
+        return {
+          ...s,
+          value:      `${val}°C`,
+          status:     status === 'danger' ? 'HIGH' : status === 'warn' ? 'WARM' : 'OK',
+          statusType: status === 'normal' ? 'ok' : status,
+        }
+      }
+      if (s.id === 'PAYLOAD') {
+        const present = telemetry.payloadPresent
+        const locked  = telemetry.payloadLocked
+        const weight  = telemetry.payload?.value ?? '—'
+        return {
+          ...s,
+          value:      present ? `${weight} kg` : 'NONE',
+          status:     present ? (locked ? 'LOCKED' : 'PRESENT') : 'EMPTY',
+          statusType: present ? 'ok' : 'warn',
+        }
+      }
+      if (s.id === 'GPS') {
+        return {
+          ...s,
+          value:      `${telemetry.coords.lat}, ${telemetry.coords.lon}`,
+          status:     'OK',
+          statusType: 'ok',
+        }
+      }
+      return s
+    }))
+  }, [
+    connected,
+    telemetry.temp?.value,
+    telemetry.payload?.value,
+    telemetry.payloadPresent,
+    telemetry.payloadLocked,
+    telemetry.coords.lat,
+    telemetry.coords.lon,
+  ])
+
+  // ─── Update sensor tile after a command result ────────────────────────────────
   const updateSensor = useCallback((commandId, data) => {
     setSensors(prev => prev.map(s => {
       if (commandId === 'GPS_RECAL'      && s.id === 'GPS')     return { ...s, value: data.satellites ? `${data.satellites} sats` : s.value, status: 'OK', statusType: 'ok' }
@@ -35,9 +97,10 @@ export function useSensor() {
     }))
   }, [])
 
+  // ─── Run a command (quick action or typed) ────────────────────────────────────
   const runCommand = useCallback(async (commandId) => {
     if (running) return
-    const cmd = QUICK_COMMANDS.find(c => c.id === commandId)
+    const cmd   = QUICK_COMMANDS.find(c => c.id === commandId)
     const label = cmd?.label || commandId
 
     setRunning(commandId)
@@ -48,7 +111,9 @@ export function useSensor() {
       const result = await executeCommand(commandId)
       addLine(result.level || 'ok', result.output)
       if (result.data) updateSensor(commandId, result.data)
-      const evType = result.level === 'warn' ? 'SENSOR_WARN' : result.level === 'err' ? 'SENSOR_ERR' : 'SENSOR_OK'
+      const evType = result.level === 'warn' ? 'SENSOR_WARN'
+                   : result.level === 'err'  ? 'SENSOR_ERR'
+                   : 'SENSOR_OK'
       emitEvent(evType, `${label}: ${result.output}`)
     } catch (e) {
       addLine('err', `ERROR — ${e.message}`)
@@ -58,31 +123,31 @@ export function useSensor() {
     }
   }, [running, addLine, updateSensor])
 
-  // Parse typed command input
+  // ─── Typed command parser ─────────────────────────────────────────────────────
   const parseInput = useCallback((raw) => {
     const clean = raw.trim().toUpperCase()
     const map = {
-      'CAPTURE':   'CAMERA_CAPTURE',
-      'CAM':       'CAMERA_CAPTURE',
-      'OBS':       'OBSTACLE_SCAN',
-      'OBS_SCAN':  'OBSTACLE_SCAN',
-      'OBSTACLE':  'OBSTACLE_SCAN',
-      'TEMP':      'TEMP_CHECK',
-      'TEMPERATURE':'TEMP_CHECK',
-      'PAYLOAD':   'PAYLOAD_VERIFY',
-      'PAY':       'PAYLOAD_VERIFY',
-      'GPS':       'GPS_RECAL',
-      'GPS_RECAL': 'GPS_RECAL',
-      'LIDAR':     'LIDAR_SCAN',
-      'BARO':      'BARO_CHECK',
-      'BAROMETER': 'BARO_CHECK',
-      'IMU':       'IMU_CALIBRATE',
-      'IMU_CAL':   'IMU_CALIBRATE',
-      'DIAG':      'FULL_DIAGNOSTIC',
-      'DIAG_ALL':  'FULL_DIAGNOSTIC',
-      'DIAGNOSTIC':'FULL_DIAGNOSTIC',
-      'HELP':      '__HELP__',
-      'CLEAR':     '__CLEAR__',
+      'CAPTURE':     'CAMERA_CAPTURE',
+      'CAM':         'CAMERA_CAPTURE',
+      'OBS':         'OBSTACLE_SCAN',
+      'OBS_SCAN':    'OBSTACLE_SCAN',
+      'OBSTACLE':    'OBSTACLE_SCAN',
+      'TEMP':        'TEMP_CHECK',
+      'TEMPERATURE': 'TEMP_CHECK',
+      'PAYLOAD':     'PAYLOAD_VERIFY',
+      'PAY':         'PAYLOAD_VERIFY',
+      'GPS':         'GPS_RECAL',
+      'GPS_RECAL':   'GPS_RECAL',
+      'LIDAR':       'LIDAR_SCAN',
+      'BARO':        'BARO_CHECK',
+      'BAROMETER':   'BARO_CHECK',
+      'IMU':         'IMU_CALIBRATE',
+      'IMU_CAL':     'IMU_CALIBRATE',
+      'DIAG':        'FULL_DIAGNOSTIC',
+      'DIAG_ALL':    'FULL_DIAGNOSTIC',
+      'DIAGNOSTIC':  'FULL_DIAGNOSTIC',
+      'HELP':        '__HELP__',
+      'CLEAR':       '__CLEAR__',
     }
     return map[clean] || null
   }, [])
@@ -97,8 +162,8 @@ export function useSensor() {
 
     const resolved = parseInput(raw)
     if (resolved === '__HELP__') {
-      addLine('sys',  'Commands: CAPTURE, OBS_SCAN, TEMP, PAYLOAD, GPS_RECAL,')
-      addLine('sys',  '          LIDAR, BARO, IMU_CAL, DIAG_ALL, CLEAR, HELP')
+      addLine('sys', 'Commands: CAPTURE, OBS_SCAN, TEMP, PAYLOAD, GPS_RECAL,')
+      addLine('sys', '          LIDAR, BARO, IMU_CAL, DIAG_ALL, CLEAR, HELP')
       return
     }
     if (resolved === '__CLEAR__') {

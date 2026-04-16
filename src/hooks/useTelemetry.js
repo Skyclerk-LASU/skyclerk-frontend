@@ -1,112 +1,219 @@
-import { emitEvent } from '../services/missionEventBus'
 import { useState, useEffect, useRef } from 'react'
+import { ref, onValue }                from 'firebase/database'
+import { rtdb }                        from '../firebase/config'
+import { emitEvent }                   from '../services/missionEventBus'
 
+// ─── Thresholds ────────────────────────────────────────────────────────────────
 const LIMITS = {
-  altitude:      { min: 0,    max: 250,  warn: 200,  danger: 240  },
-  speed:         { min: 0,    max: 30,   warn: 25,   danger: 29   },
-  battery:       { min: 0,    max: 100,  warn: 30,   danger: 15   },
-  signal:        { min: 0,    max: 100,  warn: 40,   danger: 20   },
-  payloadWeight: { min: 0,    max: 5,    warn: 4,    danger: 4.8  },
-  temp:          { min: 20,   max: 80,   warn: 60,   danger: 72   },
+  altitude:      { min: 0,  max: 250, warn: 200, danger: 240 },
+  speed:         { min: 0,  max: 30,  warn: 25,  danger: 29  },
+  battery:       { min: 0,  max: 100, warn: 30,  danger: 15  },
+  signal:        { min: 0,  max: 100, warn: 40,  danger: 20  },
+  payload:       { min: 0,  max: 5,   warn: 4,   danger: 4.8 },
+  temp:          { min: 20, max: 80,  warn: 60,  danger: 72  },
 }
 
-function clamp(val, min, max) {
-  return Math.min(max, Math.max(min, val))
-}
+// ─── Helpers ───────────────────────────────────────────────────────────────────
 
-function drift(current, min, max, step) {
-  const change = (Math.random() - 0.5) * step
-  return clamp(parseFloat((current + change).toFixed(2)), min, max)
-}
-
+/**
+ * Returns 'danger' | 'warn' | 'normal' for a given metric value.
+ * battery and signal are "lower is worse"; everything else is "higher is worse".
+ */
 function getStatus(key, value) {
   const l = LIMITS[key]
   if (!l) return 'normal'
-  // battery and signal — lower is worse
+
   if (key === 'battery' || key === 'signal') {
     if (value <= l.danger) return 'danger'
     if (value <= l.warn)   return 'warn'
     return 'normal'
   }
-  // others — higher is worse
+
   if (value >= l.danger) return 'danger'
   if (value >= l.warn)   return 'warn'
   return 'normal'
 }
 
+/**
+ * Returns 0-100 representing where `value` sits within [min, max].
+ */
 function getPct(key, value) {
   const l = LIMITS[key]
   if (!l) return 50
   return Math.round(((value - l.min) / (l.max - l.min)) * 100)
 }
 
-const INITIAL = {
-  altitude:      120,
-  speed:         14,
-  battery:       67,
-  signal:        92,
-  heading:       247,
-  temp:          38,
-  payloadWeight: 1.2,
-  lat:           6.5244,
-  lng:           3.3792,
-  uptime:        0,
+// ─── Defaults ─────────────────────────────────────────────────────────────────
+const DEFAULT_RAW = {
+  battery:        0,
+  altitude:       0,
+  speed:          0,
+  signal:         0,
+  temp:           0,
+  lat:            6.5530,
+  lon:            3.9806,
+  heading:        0,
+  payload:        0,
+  payloadLocked:  false,
+  payloadPresent: false,
+  status:         'IDLE',
+  armed:          false,
+  uptime:         0,
 }
 
-export function useTelemetry(intervalMs = 1200) {
-  const [data, setData] = useState(INITIAL)
-  const [prevData, setPrevData] = useState(INITIAL)
-  const uptimeRef = useRef(0)
+// ─── Enrichment ────────────────────────────────────────────────────────────────
+/**
+ * Converts a raw Firebase telemetry object into the enriched shape
+ * { value, unit, label, pct, status } that UI components consume.
+ */
+function enrich(raw) {
+  return {
+    altitude: {
+      value:  Math.round(raw.altitude),
+      unit:   'M',
+      label:  'ALTITUDE',
+      pct:    getPct('altitude', raw.altitude),
+      status: getStatus('altitude', raw.altitude),
+    },
+    speed: {
+      value:  Math.round(raw.speed),
+      unit:   'M/S',
+      label:  'SPEED',
+      pct:    getPct('speed', raw.speed),
+      status: getStatus('speed', raw.speed),
+    },
+    battery: {
+      value:  Math.round(raw.battery),
+      unit:   '%',
+      label:  'BATTERY',
+      pct:    getPct('battery', raw.battery),
+      status: getStatus('battery', raw.battery),
+    },
+    signal: {
+      value:  Math.round(raw.signal),
+      unit:   '%',
+      label:  'SIGNAL',
+      pct:    getPct('signal', raw.signal),
+      status: getStatus('signal', raw.signal),
+    },
+    heading: {
+      value:  Math.round(raw.heading),
+      unit:   '°',
+      label:  'HEADING',
+      pct:    getPct('altitude', raw.heading), // directional — no dedicated limit
+      status: 'normal',
+    },
+    temp: {
+      value:  Math.round(raw.temp),
+      unit:   '°C',
+      label:  'TEMP',
+      pct:    getPct('temp', raw.temp),
+      status: getStatus('temp', raw.temp),
+    },
+    payload: {
+      value:  parseFloat(raw.payload).toFixed(1),
+      unit:   'KG',
+      label:  'PAYLOAD',
+      pct:    getPct('payload', raw.payload),
+      status: getStatus('payload', raw.payload),
+    },
+    // Pass-through fields — not gauge metrics but used by other panels
+    coords:         { lat: parseFloat(raw.lat).toFixed(4), lon: parseFloat(raw.lon).toFixed(4) },
+    payloadLocked:  raw.payloadLocked,
+    payloadPresent: raw.payloadPresent,
+    droneStatus:    raw.status,   // renamed to avoid clash with metric .status fields
+    armed:          raw.armed,
+    uptime:         raw.uptime,
+  }
+}
+
+// ─── Event emission ────────────────────────────────────────────────────────────
+// Keyed by metric name — persisted outside the component so it survives re-renders.
+const _prevStatus = {}
+
+function emitStatusChanges(enriched) {
+  const GAUGE_KEYS = ['altitude', 'speed', 'battery', 'signal', 'temp', 'payload']
+
+  GAUGE_KEYS.forEach(key => {
+    const metric = enriched[key]
+    if (!metric) return
+
+    const prev = _prevStatus[key]
+    const curr = metric.status
+
+    if (prev === curr) return // nothing changed
+
+    if (curr === 'danger') {
+      emitEvent('TELE_DANGER', `${metric.label} critical — ${metric.value}${metric.unit}`)
+    } else if (curr === 'warn' && prev !== 'danger') {
+      emitEvent('TELE_WARN', `${metric.label} warning — ${metric.value}${metric.unit}`)
+    } else if (curr === 'normal' && prev && prev !== 'normal') {
+      emitEvent('TELE_NORMAL', `${metric.label} returned to normal — ${metric.value}${metric.unit}`)
+    }
+
+    _prevStatus[key] = curr
+  })
+}
+
+// ─── Hook ──────────────────────────────────────────────────────────────────────
+/**
+ * useTelemetry()
+ *
+ * Subscribes to Firebase Realtime Database at `drone/telemetry`, enriches
+ * the raw values with status classification and percentage helpers, and
+ * emits mission-bus events whenever a metric changes severity level.
+ *
+ * Returns:
+ *   telemetry  — enriched metric map (see `enrich` above)
+ *   connected  — true once Firebase has returned a valid snapshot
+ *   latency    — round-trip ms from onValue callback firing to state set
+ */
+export function useTelemetry() {
+  const [telemetry, setTelemetry] = useState(() => enrich(DEFAULT_RAW))
+  const [connected, setConnected] = useState(false)
+  const [latency,   setLatency]   = useState(0)
 
   useEffect(() => {
-    const id = setInterval(() => {
-      setData(prev => {
-        setPrevData(prev)
-        uptimeRef.current += intervalMs / 1000
+    const telemRef = ref(rtdb, 'drone/telemetry')
 
-        return {
-          altitude:      drift(prev.altitude,      0,    250,  2),
-          speed:         drift(prev.speed,         0,    30,   1.5),
-          battery:       drift(prev.battery,       0,    100,  0.3),
-          signal:        drift(prev.signal,        0,    100,  1),
-          heading:       drift(prev.heading,       0,    360,  3),
-          temp:          drift(prev.temp,          20,   80,   0.5),
-          payloadWeight: drift(prev.payloadWeight, 0,    5,    0.02),
-          lat:           drift(prev.lat,           6.40, 6.60, 0.0003),
-          lng:           drift(prev.lng,           3.25, 3.50, 0.0003),
-          uptime:        uptimeRef.current,
+    const unsub = onValue(telemRef, snap => {
+      const start = Date.now()
+
+      if (snap.exists()) {
+        const d = snap.val()
+
+        // Normalise raw Firebase payload — guard every field with a fallback
+        const raw = {
+          battery:        d.battery        ?? 0,
+          altitude:       d.altitude       ?? 0,
+          speed:          d.speed          ?? 0,
+          signal:         Math.abs(d.rssi  ?? d.signal ?? 0), // rssi is negative on some firmwares
+          temp:           d.temp           ?? 0,
+          lat:            d.lat            ?? 6.5530,
+          lon:            d.lon            ?? 3.9806,
+          heading:        d.heading        ?? 0,
+          payload:        d.payload        ?? 0,
+          payloadLocked:  d.payloadLocked  ?? false,
+          payloadPresent: d.payloadPresent ?? false,
+          status:         d.status         ?? 'IDLE',
+          armed:          d.armed          ?? false,
+          uptime:         d.uptime         ?? 0,
         }
-      })
-    }, intervalMs)
 
-    return () => clearInterval(id)
-  }, [intervalMs])
+        const enriched = enrich(raw)
+        emitStatusChanges(enriched)
 
-  const enriched = {
-    altitude:      { value: Math.round(data.altitude),           unit: 'M',   label: 'ALTITUDE',       pct: getPct('altitude', data.altitude),           status: getStatus('altitude', data.altitude),           prev: Math.round(prevData.altitude) },
-    speed:         { value: Math.round(data.speed),              unit: 'M/S', label: 'SPEED',          pct: getPct('speed', data.speed),                 status: getStatus('speed', data.speed),                 prev: Math.round(prevData.speed) },
-    battery:       { value: Math.round(data.battery),            unit: '%',   label: 'BATTERY',        pct: getPct('battery', data.battery),             status: getStatus('battery', data.battery),             prev: Math.round(prevData.battery) },
-    signal:        { value: Math.round(data.signal),             unit: '%',   label: 'SIGNAL',         pct: getPct('signal', data.signal),               status: getStatus('signal', data.signal),               prev: Math.round(prevData.signal) },
-    heading:       { value: Math.round(data.heading),            unit: '°',   label: 'HEADING',        pct: getPct('altitude', data.heading),            status: 'normal',                                       prev: Math.round(prevData.heading) },
-    temp:          { value: Math.round(data.temp),               unit: '°C',  label: 'TEMP',           pct: getPct('temp', data.temp),                   status: getStatus('temp', data.temp),                   prev: Math.round(prevData.temp) },
-    payloadWeight: { value: data.payloadWeight.toFixed(1),       unit: 'KG',  label: 'PAYLOAD',        pct: getPct('payloadWeight', data.payloadWeight), status: getStatus('payloadWeight', data.payloadWeight), prev: prevData.payloadWeight.toFixed(1) },
-    coords:        { lat: data.lat.toFixed(4),                   lng: data.lng.toFixed(4) },
-    uptime:        data.uptime,
-  }
+        setTelemetry(enriched)
+        setConnected(true)
+        setLatency(Date.now() - start)
+      } else {
+        // Snapshot missing — drone offline or path wrong
+        setConnected(false)
+      }
+    })
 
+    return () => unsub()
+  }, [])
 
-  // Emit telemetry warning events
-  const prevStatusRef = typeof window !== 'undefined' ? (window.__skycleckTeleStatus = window.__skycleckTeleStatus || {}) : {}
-  Object.entries(enriched).forEach(([key, metric]) => {
-    if (!metric || typeof metric.status === 'undefined') return
-    const prev = prevStatusRef[key]
-    if (prev !== metric.status) {
-      if (metric.status === 'danger') emitEvent('TELE_DANGER', `${metric.label} critical — ${metric.value}${metric.unit}`)
-      else if (metric.status === 'warn' && prev !== 'danger') emitEvent('TELE_WARN', `${metric.label} warning — ${metric.value}${metric.unit}`)
-      else if (metric.status === 'normal' && prev && prev !== 'normal') emitEvent('TELE_NORMAL', `${metric.label} returned to normal — ${metric.value}${metric.unit}`)
-      prevStatusRef[key] = metric.status
-    }
-  })
-
-  return enriched
+  return { telemetry, connected, latency }
 }

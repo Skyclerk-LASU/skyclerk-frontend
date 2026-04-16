@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTelemetry } from '../hooks/useTelemetry'
 
+// ─── Helpers ───────────────────────────────────────────────────────────────────
 function formatUptime(seconds) {
   const h = String(Math.floor(seconds / 3600)).padStart(2, '0')
   const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')
@@ -8,20 +9,24 @@ function formatUptime(seconds) {
   return `${h}:${m}:${s}`
 }
 
+// ─── TeleCard ──────────────────────────────────────────────────────────────────
 function TeleCard({ metric }) {
   const [flash, setFlash] = useState(false)
+  const prevRef = useRef(metric.value)
 
   useEffect(() => {
-    if (metric.value !== metric.prev) {
+    if (metric.value !== prevRef.current) {
+      prevRef.current = metric.value
       setFlash(true)
       const t = setTimeout(() => setFlash(false), 400)
       return () => clearTimeout(t)
     }
   }, [metric.value])
 
-  const trend = parseFloat(metric.value) > parseFloat(metric.prev) ? 'up'
-              : parseFloat(metric.value) < parseFloat(metric.prev) ? 'down'
-              : 'flat'
+  // Safe numeric trend — metric.value may be a string e.g. "1.2"
+  const curr = parseFloat(metric.value)
+  const prev = parseFloat(metric.prev ?? metric.value)
+  const trend = curr > prev ? 'up' : curr < prev ? 'down' : 'flat'
 
   return (
     <div className={`tele-card tele-card--${metric.status} ${flash ? 'tele-card--flash' : ''}`}>
@@ -47,28 +52,38 @@ function TeleCard({ metric }) {
   )
 }
 
+// ─── TelemetryPanel ────────────────────────────────────────────────────────────
 export default function TelemetryPanel() {
-  const tele = useTelemetry(1200)
+  // useTelemetry() now takes no arguments — interval is driven by Firebase onValue
+  const { telemetry, connected, latency } = useTelemetry()
 
   const cards = [
-    tele.altitude,
-    tele.speed,
-    tele.battery,
-    tele.signal,
-    tele.payloadWeight,
-    tele.temp,
+    telemetry.altitude,
+    telemetry.speed,
+    telemetry.battery,
+    telemetry.signal,
+    telemetry.payload,    // renamed from payloadWeight in merged useTelemetry
+    telemetry.temp,
   ]
 
-  const hasWarning = cards.some(c => c.status === 'warn')
-  const hasDanger  = cards.some(c => c.status === 'danger')
-  const statusLabel = hasDanger ? 'CRITICAL' : hasWarning ? 'WARNING' : 'NOMINAL'
-  const statusClass = hasDanger ? 'danger' : hasWarning ? 'warn' : 'active'
+  const hasWarning  = cards.some(c => c.status === 'warn')
+  const hasDanger   = cards.some(c => c.status === 'danger')
+  const statusLabel = hasDanger  ? 'CRITICAL' : hasWarning ? 'WARNING' : connected ? 'NOMINAL' : 'OFFLINE'
+  const statusClass = hasDanger  ? 'danger'   : hasWarning ? 'warn'    : connected ? 'active'  : 'danger'
 
   return (
     <div className="panel tele-panel">
       <div className="panel-header">
         <div className="panel-title">TELEMETRY</div>
-        <div className={`badge ${statusClass}`}>{statusLabel}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* Latency indicator — only shown when connected */}
+          {connected && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--text3)', letterSpacing: '1px' }}>
+              {latency}ms
+            </span>
+          )}
+          <div className={`badge ${statusClass}`}>{statusLabel}</div>
+        </div>
       </div>
 
       <div className="tele-grid">
@@ -80,15 +95,29 @@ export default function TelemetryPanel() {
       <div className="tele-coords">
         <div className="tele-coords__row">
           <span className="tele-coords__label">LAT</span>
-          <span className="tele-coords__val">{tele.coords.lat}°N</span>
+          {/* coords uses lon (not lng) to match Firebase field name */}
+          <span className="tele-coords__val">{telemetry.coords.lat}°N</span>
         </div>
         <div className="tele-coords__row">
           <span className="tele-coords__label">LNG</span>
-          <span className="tele-coords__val">{tele.coords.lng}°E</span>
+          <span className="tele-coords__val">{telemetry.coords.lon}°E</span>
         </div>
         <div className="tele-coords__row">
           <span className="tele-coords__label">UPTIME</span>
-          <span className="tele-coords__val">{formatUptime(tele.uptime)}</span>
+          <span className="tele-coords__val">{formatUptime(telemetry.uptime)}</span>
+        </div>
+        {/* Extra Firebase fields exposed for visibility */}
+        <div className="tele-coords__row">
+          <span className="tele-coords__label">ARMED</span>
+          <span className="tele-coords__val" style={{ color: telemetry.armed ? 'var(--red)' : 'var(--green)' }}>
+            {telemetry.armed ? 'YES' : 'NO'}
+          </span>
+        </div>
+        <div className="tele-coords__row">
+          <span className="tele-coords__label">PAYLOAD</span>
+          <span className="tele-coords__val" style={{ color: telemetry.payloadPresent ? 'var(--cyan)' : 'var(--text3)' }}>
+            {telemetry.payloadPresent ? (telemetry.payloadLocked ? 'LOCKED' : 'PRESENT') : 'NONE'}
+          </span>
         </div>
       </div>
     </div>
