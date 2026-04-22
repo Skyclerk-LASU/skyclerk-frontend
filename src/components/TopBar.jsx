@@ -11,6 +11,7 @@ const NAV_LINKS = [
   { path: '/sensors',       icon: 'sensor',    label: 'SENSORS'    },
   { path: '/notifications', icon: 'notify',    label: 'NOTIFY'     },
   { path: '/logs',          icon: 'logs',      label: 'LOGS'       },
+  { path: '/esp-test',      icon: 'sensor',    label: 'ESP TEST'   },
 ]
 
 export default function TopBar() {

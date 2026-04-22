@@ -30,12 +30,15 @@ async function sendNotification(type, { pkg, sender, recipient, channel, extra }
     createdAt: serverTimestamp(),
   })
 
-  // 2. Trigger real send via Cloud Function (uncomment when ready)
-  // await fetch('https://us-central1-skyclerk-85677.cloudfunctions.net/sendNotification', {
-  //   method: 'POST',
-  //   headers: { 'Content-Type': 'application/json' },
-  //   body: JSON.stringify({ type, message, recipient, channel }),
-  // })
+  // 2. Trigger real send via backend API (when backend is deployed)
+  if (channel === 'EMAIL' || channel === 'BOTH') {
+    sendEmailViaBackend({
+      to: recipient.email,
+      subject: `${type} Notification - ${pkg.id}`,
+      body: message,
+      recipientName: recipient.name,
+    }).catch(err => console.warn('[Backend] Email send failed:', err.message))
+  }
 
   // 3. Simulate send delay
   await new Promise(r => setTimeout(r, 700 + Math.random() * 500))
@@ -61,3 +64,41 @@ export async function fetchNotificationHistory(limitCount = 20) {
 }
 
 export { TEMPLATES }
+
+// ─────────────────────────────────────────────────────────────────────
+// Backend Email Integration
+// Sends email via your backend API
+// ─────────────────────────────────────────────────────────────────────
+
+const BACKEND_API_URL = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:3001/api'
+
+export async function sendEmailViaBackend(emailData) {
+  try {
+    const response = await fetch(`${BACKEND_API_URL}/notifications/email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${import.meta.env.VITE_API_KEY}`,
+      },
+      body: JSON.stringify({
+        to: emailData.to,
+        subject: emailData.subject,
+        body: emailData.body,
+        recipientName: emailData.recipientName,
+        timestamp: new Date().toISOString(),
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Email send failed: ${response.statusText}`)
+    }
+
+    const result = await response.json()
+    console.log('[Backend] Email sent:', result)
+    return result
+  } catch (err) {
+    console.error('[Backend] Email API error:', err.message)
+    // Don't throw — notifications should not break if backend is down
+    return { success: false, error: err.message }
+  }
+}

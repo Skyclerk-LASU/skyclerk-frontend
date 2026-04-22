@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNotification, CHANNELS } from '../hooks/useNotification'
+import WeatherSafetyNotice from './WeatherSafetyNotice'
 
 function Field({ label, value, onChange, placeholder, type = 'text' }) {
   return (
@@ -55,6 +56,7 @@ export default function NotificationPanel() {
 
       {tab === 'compose' && (
         <div className="nf-body">
+          <WeatherSafetyNotice />
 
           {/* Package selector */}
           <Section title="PACKAGE">
@@ -159,6 +161,7 @@ export default function NotificationPanel() {
 
       {tab === 'history' && (
         <div className="nf-body">
+          <WeatherSafetyNotice />
           {history.length === 0 && (
             <div className="nf-empty">No notifications sent yet</div>
           )}

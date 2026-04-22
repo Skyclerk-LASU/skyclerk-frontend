@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import TopBar from './components/TopBar'
+import ToastNotificationContainer from './components/ToastNotificationContainer'
 import DashboardPage     from './pages/DashboardPage'
 import TelemetryPage     from './pages/TelemetryPage'
 import MissionsPage      from './pages/MissionsPage'
 import SensorsPage       from './pages/SensorsPage'
 import NotificationsPage from './pages/NotificationsPage'
 import LogsPage          from './pages/LogsPage'
+import EspTestPage       from './pages/EspTestPage'
 import skyclerkLogo from './assets/skyclerk-logo.jpg'
 
 function LoadingScreen() {
@@ -34,6 +36,7 @@ export default function App() {
     <BrowserRouter>
       <div className="dash">
         <TopBar />
+        <ToastNotificationContainer />
         <Routes>
           <Route path="/"              element={<DashboardPage />} />
           <Route path="/telemetry"     element={<TelemetryPage />} />
@@ -41,6 +44,7 @@ export default function App() {
           <Route path="/sensors"       element={<SensorsPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/logs"          element={<LogsPage />} />
+          <Route path="/esp-test"      element={<EspTestPage />} />
         </Routes>
       </div>
     </BrowserRouter>

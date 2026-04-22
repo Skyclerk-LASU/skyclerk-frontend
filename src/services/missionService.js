@@ -58,6 +58,81 @@ export async function resetMission(pkgId) {
   emitEvent('RESET', `${pkgId} reset to IDLE`)
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// NEW: Notification-Triggered Mission Updates
+// These functions update mission state AND trigger appropriate notifications
+// ─────────────────────────────────────────────────────────────────────
+
+export async function markDroneLoaded(pkgId) {
+  const mission = { id: pkgId, state: 'LOADED' }
+  await updateDoc(doc(db, COL, pkgId), { state: 'LOADED', progress: 5, updatedAt: serverTimestamp() })
+  emitEvent('SYS_OK', `${pkgId} marked as LOADED`)
+  
+  // Trigger automated notifications
+  const { triggerDroneLoadedNotifications } = await import('./automatedNotificationService')
+  try {
+    await triggerDroneLoadedNotifications(mission)
+  } catch (err) {
+    console.warn('Notification trigger error:', err.message)
+  }
+}
+
+export async function markEnRoute(pkgId, eta) {
+  const mission = { id: pkgId, state: 'EN_ROUTE', eta: eta || '00:15:00' }
+  await updateDoc(doc(db, COL, pkgId), { state: 'EN_ROUTE', progress: 25, eta: eta || '00:15:00', updatedAt: serverTimestamp() })
+  emitEvent('EN_ROUTE', `${pkgId} is en route — ETA: ${eta}`)
+  
+  // Trigger automated notifications
+  const { triggerEnRouteNotifications } = await import('./automatedNotificationService')
+  try {
+    await triggerEnRouteNotifications(mission)
+  } catch (err) {
+    console.warn('Notification trigger error:', err.message)
+  }
+}
+
+export async function markLanded(pkgId) {
+  const mission = { id: pkgId, state: 'LANDED' }
+  await updateDoc(doc(db, COL, pkgId), { state: 'LANDED', progress: 60, updatedAt: serverTimestamp() })
+  emitEvent('LAND', `${pkgId} has LANDED`)
+  
+  // Trigger automated notifications  
+  const { triggerLandedNotifications } = await import('./automatedNotificationService')
+  try {
+    await triggerLandedNotifications(mission)
+  } catch (err) {
+    console.warn('Notification trigger error:', err.message)
+  }
+}
+
+export async function markPackageOffloaded(pkgId) {
+  const mission = { id: pkgId, state: 'OFFLOADED' }
+  await updateDoc(doc(db, COL, pkgId), { state: 'OFFLOADED', progress: 80, updatedAt: serverTimestamp() })
+  emitEvent('SYS_OK', `${pkgId} PACKAGE OFFLOADED`)
+  
+  // Trigger automated notifications
+  const { triggerOffloadedNotifications } = await import('./automatedNotificationService')
+  try {
+    await triggerOffloadedNotifications(mission)
+  } catch (err) {
+    console.warn('Notification trigger error:', err.message)
+  }
+}
+
+export async function markReturningToBase(pkgId) {
+  const mission = { id: pkgId, state: 'RETURNING' }
+  await updateDoc(doc(db, COL, pkgId), { state: 'RETURNING', progress: 90, updatedAt: serverTimestamp() })
+  emitEvent('RETURNING', `${pkgId} RETURNING TO BASE`)
+  
+  // Trigger automated notifications
+  const { triggerReturningNotifications } = await import('./automatedNotificationService')
+  try {
+    await triggerReturningNotifications(mission)
+  } catch (err) {
+    console.warn('Notification trigger error:', err.message)
+  }
+}
+
 // Run once to seed Firestore: import('./services/missionService').then(m => m.seedMissions())
 export async function seedMissions() {
   const pkgs = [
